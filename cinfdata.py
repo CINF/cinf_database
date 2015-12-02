@@ -8,14 +8,11 @@ import sys
 # The print function is needed for the MySQLdb imports, therefore it is defined before all
 # the imports are complete
 INHIBIT_OUTPUT = False
-def print_message(message, logging=False):
+def print_message(message):
     """Print a message to the user, using either simple prints or logging"""
     if INHIBIT_OUTPUT:
         return
-    if logging:
-        pass
-    else:
-        print('CINFDATA: {}'.format(message))
+    print('CINFDATA: {}'.format(message))
 
 
 # First try and import MySQLdb ..
@@ -165,6 +162,32 @@ class Cache(object):
                     error = 'Creation of the directory: {}\n which is neede for the '\
                             'cache failed. Please check permissions of the parent folder.'
                     raise CinfdataCacheError(error.format(dir_))
+
+    def save_data(self, measurement_id, data):
+        """Save a dataset to the cache
+
+        Args:
+            measurement_id (int): The database id of the dataset to save
+            data (numpy.array): The data as a numpy array
+        """
+        pass
+
+    def load_data(self, measurement_id, data):
+        """Load a dataset from the cache
+
+        Args:
+            measurement_id (int): The database id of the dataset to load
+            data (numpy.array): The data as a numpy array
+        """
+        pass
+
+    def save_metadata(self, measurement_id, metadata):
+        """Save a meta dataset to the cache"""
+        pass
+
+    def load_metadata(self, measurement_id, metadata):
+        """Load a meta dataset from the cache"""
+        pass
 
 
 def test():
