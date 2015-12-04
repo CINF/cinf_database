@@ -1,6 +1,8 @@
 
 from __future__ import unicode_literals, print_function
+import numpy as np
 from os import path
+import time
 import os
 import sys
 
@@ -169,17 +171,34 @@ class Cache(object):
         Args:
             measurement_id (int): The database id of the dataset to save
             data (numpy.array): The data as a numpy array
-        """
-        pass
 
-    def load_data(self, measurement_id, data):
+        Returns:
+            str: The file location of the saved array
+
+        Raises:
+            CinfdataCacheError: If data is an object array (a numpy array that contains
+                generic Python objects)
+        """
+        filepath = path.join(self.data_dir, '{}.npy'.format(measurement_id))
+        if data.dtype.hasobject:
+            raise CinfdataCacheError('Saving object arrays is not supported')
+        np.save(filepath, data)
+        return filepath
+
+    def load_data(self, measurement_id):
         """Load a dataset from the cache
 
         Args:
             measurement_id (int): The database id of the dataset to load
-            data (numpy.array): The data as a numpy array
         """
-        pass
+        filepath = path.join(self.data_dir, '{}.npy'.format(measurement_id))
+        try:
+            data = np.load(filepath)
+        except IOError:
+            message = 'The cache file:\n{}\nexists, but could not be loaded. '\
+                      'Check file permissions'
+            raise CinfdataCacheError(message.format(filepath))
+        return data
 
     def save_metadata(self, measurement_id, metadata):
         """Save a meta dataset to the cache"""
@@ -192,6 +211,11 @@ class Cache(object):
 
 def test():
     cinfdata = Cinfdata('dummy', use_caching=True, cache_only=True)
+    arr = np.arange(10**4)
+    cinfdata.cache.save_data(1000, arr)
+    arr2 = cinfdata.cache.load_data(1000)
+    print(type(arr2))
+    print(arr2)
 
 
 if __name__ == '__main__':
