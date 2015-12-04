@@ -130,6 +130,8 @@ class Cache(object):
         if cache_dir is None:
             this_dir = path.dirname(path.abspath(__file__))
             self.cache_dir = path.join(this_dir, 'cache')
+        else:
+            self.cache_dir = cache_dir
         print_message('Cache dir: {}'.format(self.cache_dir))
 
         # Form folder paths, subfolder for each setup and under that subfolders for data
