@@ -193,7 +193,12 @@ class Cache(object):
         Args:
             measurement_id (int): The database id of the dataset to load
         """
+        # Form filepath and check if the file exists
         filepath = path.join(self.data_dir, '{}.npy'.format(measurement_id))
+        if not path.exists(filepath):
+            return None
+
+        # Try and load the file and raise error is it fails
         try:
             data = np.load(filepath)
         except IOError:
