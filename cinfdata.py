@@ -1,8 +1,8 @@
+# pylint: disable=no-member,import-error
 
 from __future__ import unicode_literals, print_function
 import numpy as np
 from os import path
-import time
 import os
 import sys
 
@@ -34,7 +34,7 @@ except ImportError:
                           'installing mysqlclient!')
     except ImportError:
         # if that fails, just set it to None to indicate
-        MySQLdb = None
+        MySQLdb = None  # pylint: disable=invalid-name
         print_message('Using cinfdata without database')
 
 
@@ -62,7 +62,7 @@ class Cinfdata(object):
                 database was created on. Default is 9999.
             use_caching (bool): If set to True, this module will locally cache data and
                 metadata. WARNING: DO NOT use caching unless you understand the limitations.
-            cache_dir (str): The directory to use for the cache. As default i used a
+            cache_dir (str): The directory to use for the cache. As default is used a
                 directory named 'cache' in the same folder as this file (cinfdata.py) is
                 located in
             cache_only (bool): If set to True, no connection will be formed to the database
@@ -103,7 +103,8 @@ class Cinfdata(object):
                     host=self.secondary_host, port=local_forward_port,
                     user=self.username, passwd=self.password, db=self.database_name
                 )
-                print_message('Using port forward db connection: {}:{}'.format(self.secondary_host, local_forward_port))
+                print_message('Using port forward db connection: {}:{}'\
+                              .format(self.secondary_host, local_forward_port))
             except CONNECT_EXCEPTION:
                 self.connection = None
                 print_message('No database connection')
