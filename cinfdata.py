@@ -138,11 +138,10 @@ class Cache(object):
         # Form folder paths, subfolder for each setup and under that subfolders for data
         # and metadata
         self.setup_dir = path.join(self.cache_dir, setup_name)
-        self.data_dir = path.join(self.cache_dir, setup_name, 'data')
-        self.metadata_dir = path.join(self.cache_dir, setup_name, 'metadata')
-        dirs = [self.cache_dir, self.setup_dir, self.data_dir, self.metadata_dir]
+        self.data_dir = path.join(self.setup_dir, 'data')
+        dirs = [self.cache_dir, self.setup_dir, self.data_dir]
 
-        # Check/crate directories
+        # Check/create directories
         for dir_ in dirs:
             if path.exists(dir_):
                 # If the path dir_ exists, check that it is a dir, and that it is read and
@@ -167,6 +166,10 @@ class Cache(object):
                     error = 'Creation of the directory: {}\n which is neede for the '\
                             'cache failed. Please check permissions of the parent folder.'
                     raise CinfdataCacheError(error.format(dir_))
+
+        # Form metadata file path and load if present
+        self.metadata_file = path.join(self.setup_dir, 'metadata.pickle')
+        # FIXME load metadata?
 
     def save_data(self, measurement_id, data):
         """Save a dataset to the cache
