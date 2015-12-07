@@ -5,6 +5,7 @@ import numpy as np
 from os import path
 import os
 import sys
+import cPickle
 
 
 # The print function is needed for the MySQLdb imports, therefore it is defined before all
@@ -169,7 +170,20 @@ class Cache(object):
 
         # Form metadata file path and load if present
         self.metadata_file = path.join(self.setup_dir, 'metadata.pickle')
-        # FIXME load metadata?
+        if path.exists(self.metadata_file):
+            error = None
+            try:
+                with open(self.metadata_file, 'rb') as file_:
+                    self.metadata = cPickle.load(file_)
+            except IOError:
+                error = 'The file: {}\nwhich is needed for the cache, exists, but is not readable'
+            except cPickle.UnpicklingError:
+                error = 'Loading and interpreting the metadat file: {}\nfailed. '\
+                        'Please report this as a bug.'
+            if error is not None:
+                raise CinfdataCacheError(error.format(self.metadata_file))
+        else:
+            self.metadata = {}
 
     def save_data(self, measurement_id, data):
         """Save a dataset to the cache
@@ -213,19 +227,35 @@ class Cache(object):
 
     def save_metadata(self, measurement_id, metadata):
         """Save a meta dataset to the cache"""
-        pass
+        self.metadata[measurement_id] = metadata
+        self._save_metadatafile_to_file()
 
-    def load_metadata(self, measurement_id, metadata):
+    def _save_metadatafile_to_file(self):
+        """Save all the metadata to a file"""
+        error = None
+        try:
+            with open(self.metadata_file, 'wb') as file_:
+                cPickle.dump(self.metadata, file_)
+        except IOError:
+            error = 'The file: {}\nwhich is needed by the cache is not writable. '\
+                    'Check the file permissions.'
+        except cPickle.PickleError:
+            error = 'Python was unable to save the metadata dict. Report this as a bug.'
+        if error is not None:
+            raise CinfdataCacheError(error)
+
+    def load_metadata(self, measurement_id):
         """Load a meta dataset from the cache"""
-        pass
+        return self.metadata.get(measurement_id)
 
 
 def test():
     cinfdata = Cinfdata('dummy', use_caching=True, cache_only=True)
+    print(cinfdata.cache.load_metadata(1000))
     arr = np.arange(10**4)
     cinfdata.cache.save_data(1000, arr)
     arr2 = cinfdata.cache.load_data(1000)
-    print(type(arr2))
+    cinfdata.cache.save_metadata(1000, {'hello': 'world'})
     print(arr2)
 
 
