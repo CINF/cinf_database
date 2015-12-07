@@ -21,7 +21,7 @@ try:
     LOG.info('Using MySQLdb as the database module')
 except ImportError:
     try:
-        # .. if that fails, try with MySQLdb
+        # .. if that fails, try with pymysql
         import pymysql as MySQLdb
         MySQLdb.install_as_MySQLdb()
         CONNECT_EXCEPTION = MySQLdb.err.OperationalError
@@ -30,7 +30,7 @@ except ImportError:
             LOG.info('pymysql is known to be broken with Python 3. Consider '
                           'installing mysqlclient!')
     except ImportError:
-        # if that fails, just set it to None to indicate
+        # if that fails, just set it to None to indicate that we have no db module
         MySQLdb = None  # pylint: disable=invalid-name
         LOG.info('Using cinfdata without database')
 
@@ -82,7 +82,7 @@ class Cinfdata(object):
 
         # Init local variables
         self.measurements_table = 'measurements_{}'.format(setup_name)
-        self.data_query = 'SELECT x, y FROM xy_values_{} ORDER BY id'.format(setup_name)
+        self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s ORDER BY id'.format(setup_name)
         self.dateplots_table = 'dateplots_{}'.format(setup_name)
 
         # Init database connection
@@ -122,19 +122,24 @@ class Cinfdata(object):
 
     def get_data(self, measurement_id):
         """Get data for measurement_id"""
+        # Check if this dataset is in the cache and if so return
         if self.cache:
             data = self.cache.load_data(measurement_id)
             if data is not None:
                 return data
 
+        # Try and get the dataset from the database
         if self.cursor is not None:
             start = time()
-            self.cursor.execute(self.data_query.format(measurement_id))
+            self.cursor.execute(self.data_query, measurement_id)
             data = np.array(self.cursor.fetchall())
-            # debug log database time
-            if self.cache:
-                self.cache.save_data(measurement_id, data)
-            return data
+            LOG.debug('Fetched data for id %s from database in %0.4e s', measurement_id, time() - start)
+
+            # If there was data in the db, possibly save to cache and return
+            if data.size > 0:
+                if self.cache:
+                    self.cache.save_data(measurement_id, data)
+                return data
 
         error = 'No data found for id {}'.format(measurement_id)
         raise CinfdataError(error)
@@ -282,13 +287,8 @@ class Cache(object):
 
 
 def test():
-    cinfdata = Cinfdata('dummy', use_caching=True, cache_only=True, log_level='DEBUG')
-    print(cinfdata.cache.load_metadata(1000))
-    arr = np.arange(10**4)
-    cinfdata.cache.save_data(1000, arr)
-    arr2 = cinfdata.cache.load_data(1000)
-    cinfdata.cache.save_metadata(1000, {'hello': 'world'})
-    print(arr2)
+    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG')
+    data = cinfdata.get_data(16721)
 
 
 if __name__ == '__main__':
