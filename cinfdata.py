@@ -5,38 +5,34 @@ import numpy as np
 from os import path
 import os
 import sys
+from time import time
 import cPickle
+import logging
 
-
-# The print function is needed for the MySQLdb imports, therefore it is defined before all
-# the imports are complete
-INHIBIT_OUTPUT = False
-def print_message(message):
-    """Print a message to the user, using either simple prints or logging"""
-    if INHIBIT_OUTPUT:
-        return
-    print('CINFDATA: {}'.format(message))
+# Set up logging
+logging.basicConfig(format='%(name)s: %(message)s', level=logging.INFO)
+LOG = logging.getLogger('CINFDATA')
 
 
 # First try and import MySQLdb ..
 try:
     import MySQLdb
     CONNECT_EXCEPTION = MySQLdb.OperationalError
-    print_message('Using MySQLdb as the database module')
+    LOG.info('Using MySQLdb as the database module')
 except ImportError:
     try:
         # .. if that fails, try with MySQLdb
         import pymysql as MySQLdb
         MySQLdb.install_as_MySQLdb()
         CONNECT_EXCEPTION = MySQLdb.err.OperationalError
-        print_message('Using pymysql as the database module')
+        LOG.info('Using pymysql as the database module')
         if sys.version_info.major > 2:
-            print_message('pymysql is known to be broken with Python 3. Consider '
+            LOG.info('pymysql is known to be broken with Python 3. Consider '
                           'installing mysqlclient!')
     except ImportError:
         # if that fails, just set it to None to indicate
         MySQLdb = None  # pylint: disable=invalid-name
-        print_message('Using cinfdata without database')
+        LOG.info('Using cinfdata without database')
 
 
 
@@ -53,7 +49,7 @@ class Cinfdata(object):
     password = 'cinf_reader'
 
     def __init__(self, setup_name, local_forward_port=9999, use_caching=False,
-                 cache_dir=None, cache_only=False):
+                 cache_dir=None, cache_only=False, log_level='INFO'):
         """Initialize local variables
 
         Args:
@@ -67,6 +63,8 @@ class Cinfdata(object):
                 directory named 'cache' in the same folder as this file (cinfdata.py) is
                 located in
             cache_only (bool): If set to True, no connection will be formed to the database
+            log_level (str): A string that indicates the log level, either 'INFO' (default)
+                or 'DEBUG' for more output or 'DISABLE' to disable any further output
 
         .. warning:: Be careful with caching. It will keep returning the version of the
             data from the first time it was retrieved. If data is later added to the
@@ -74,6 +72,12 @@ class Cinfdata(object):
             caching will not reflect it.
 
         """
+        # Setup logging
+        if log_level == 'DEBUG':
+            LOG.setLevel(logging.DEBUG)
+        elif log_level == 'DISABLE':
+            LOG.setLevel(logging.CRITICAL)
+
         # Init local variables
         self.measurements_table = 'measurements_{}'.format(setup_name)
         self.xy_values_table = 'xy_values_{}'.format(setup_name)
@@ -92,23 +96,24 @@ class Cinfdata(object):
 
     def _init_database_connection(self, local_forward_port):
         """Initialize the database connection"""
+        LOG.debug('Initialize database connection')
         try:
             self.connection = MySQLdb.connect(
                 host=self.main_host, user=self.username, passwd=self.password,
                 db=self.database_name,
             )
-            print_message('Using direct db connection: cinfdata:3306')
+            LOG.info('Using direct db connection: cinfdata:3306')
         except CONNECT_EXCEPTION:
             try:
                 self.connection = MySQLdb.connect(
                     host=self.secondary_host, port=local_forward_port,
                     user=self.username, passwd=self.password, db=self.database_name
                 )
-                print_message('Using port forward db connection: {}:{}'\
-                              .format(self.secondary_host, local_forward_port))
+                LOG.info('Using port forward db connection: %s:%s', self.secondary_host,
+                         local_forward_port)
             except CONNECT_EXCEPTION:
                 self.connection = None
-                print_message('No database connection')
+                LOG.info('No database connection')
 
         if self.connection is not None:
             self.cursor = self.connection.cursor()
@@ -134,7 +139,7 @@ class Cache(object):
             self.cache_dir = path.join(this_dir, 'cache')
         else:
             self.cache_dir = cache_dir
-        print_message('Cache dir: {}'.format(self.cache_dir))
+        LOG.info('Using cache dir: %s', self.cache_dir)
 
         # Form folder paths, subfolder for each setup and under that subfolders for data
         # and metadata
@@ -199,10 +204,12 @@ class Cache(object):
             CinfdataCacheError: If data is an object array (a numpy array that contains
                 generic Python objects)
         """
+        start = time()
         filepath = path.join(self.data_dir, '{}.npy'.format(measurement_id))
         if data.dtype.hasobject:
             raise CinfdataCacheError('Saving object arrays is not supported')
         np.save(filepath, data)
+        LOG.debug('Saved data for id %s to cache in %0.4e s', measurement_id, time() - start)
         return filepath
 
     def load_data(self, measurement_id):
@@ -211,6 +218,7 @@ class Cache(object):
         Args:
             measurement_id (int): The database id of the dataset to load
         """
+        start = time()
         # Form filepath and check if the file exists
         filepath = path.join(self.data_dir, '{}.npy'.format(measurement_id))
         if not path.exists(filepath):
@@ -223,12 +231,15 @@ class Cache(object):
             message = 'The cache file:\n{}\nexists, but could not be loaded. '\
                       'Check file permissions'
             raise CinfdataCacheError(message.format(filepath))
+        LOG.debug('Loaded data for id %s from cache in %0.4e s', measurement_id, time() - start)
         return data
 
     def save_metadata(self, measurement_id, metadata):
         """Save a meta dataset to the cache"""
+        start = time()
         self.metadata[measurement_id] = metadata
         self._save_metadatafile_to_file()
+        LOG.debug('Saved metadata for id %s to cache in %0.4e s', measurement_id, time() - start)
 
     def _save_metadatafile_to_file(self):
         """Save all the metadata to a file"""
@@ -246,11 +257,14 @@ class Cache(object):
 
     def load_metadata(self, measurement_id):
         """Load a meta dataset from the cache"""
-        return self.metadata.get(measurement_id)
+        start = time()
+        metadata = self.metadata.get(measurement_id)
+        LOG.debug('Loaded metadata for id %s from cache in %0.4e s', measurement_id, time() - start)
+        return metadata
 
 
 def test():
-    cinfdata = Cinfdata('dummy', use_caching=True, cache_only=True)
+    cinfdata = Cinfdata('dummy', use_caching=True, cache_only=True, log_level='DEBUG')
     print(cinfdata.cache.load_metadata(1000))
     arr = np.arange(10**4)
     cinfdata.cache.save_data(1000, arr)
