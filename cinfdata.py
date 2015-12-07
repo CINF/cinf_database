@@ -35,6 +35,8 @@ except ImportError:
         LOG.info('Using cinfdata without database')
 
 
+class CinfdataError(Exception):
+    """Generic Cinfdata exception"""
 
 
 class Cinfdata(object):
@@ -80,7 +82,7 @@ class Cinfdata(object):
 
         # Init local variables
         self.measurements_table = 'measurements_{}'.format(setup_name)
-        self.xy_values_table = 'xy_values_{}'.format(setup_name)
+        self.data_query = 'SELECT x, y FROM xy_values_{} ORDER BY id'.format(setup_name)
         self.dateplots_table = 'dateplots_{}'.format(setup_name)
 
         # Init database connection
@@ -118,8 +120,24 @@ class Cinfdata(object):
         if self.connection is not None:
             self.cursor = self.connection.cursor()
 
-    def get_data(measurement_id):
-        pass
+    def get_data(self, measurement_id):
+        """Get data for measurement_id"""
+        if self.cache:
+            data = self.cache.load_data(measurement_id)
+            if data is not None:
+                return data
+
+        if self.cursor is not None:
+            start = time()
+            self.cursor.execute(self.data_query.format(measurement_id))
+            data = np.array(self.cursor.fetchall())
+            # debug log database time
+            if self.cache:
+                self.cache.save_data(measurement_id, data)
+            return data
+
+        error = 'No data found for id {}'.format(measurement_id)
+        raise CinfdataError(error)
 
     def get_metadata(measurement_id):
         pass
