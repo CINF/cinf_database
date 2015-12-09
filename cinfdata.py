@@ -1,13 +1,17 @@
 # pylint: disable=no-member,import-error
 
 from __future__ import unicode_literals, print_function
-import numpy as np
+
 from os import path
 import os
 import sys
 from time import time
 import cPickle
 import logging
+from collections import namedtuple
+
+import numpy as np
+
 
 # Set up logging
 logging.basicConfig(format='%(name)s: %(message)s', level=logging.INFO)
@@ -28,7 +32,7 @@ except ImportError:
         LOG.info('Using pymysql as the database module')
         if sys.version_info.major > 2:
             LOG.info('pymysql is known to be broken with Python 3. Consider '
-                          'installing mysqlclient!')
+                     'installing mysqlclient!')
     except ImportError:
         # if that fails, just set it to None to indicate that we have no db module
         MySQLdb = None  # pylint: disable=invalid-name
@@ -51,7 +55,8 @@ class Cinfdata(object):
     password = 'cinf_reader'
 
     def __init__(self, setup_name, local_forward_port=9999, use_caching=False,
-                 cache_dir=None, cache_only=False, log_level='INFO'):
+                 cache_dir=None, cache_only=False, log_level='INFO',
+                 metadata_as_named_tuple=False):
         """Initialize local variables
 
         Args:
@@ -81,9 +86,10 @@ class Cinfdata(object):
             LOG.setLevel(logging.CRITICAL)
 
         # Init local variables
-        self.measurements_table = 'measurements_{}'.format(setup_name)
+        self.setup_name = setup_name
         self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s ORDER BY id'.format(setup_name)
-        self.dateplots_table = 'dateplots_{}'.format(setup_name)
+        self.metadata_query = 'SELECT * FROM measurements_{} WHERE id=%s'.format(setup_name)
+        self._column_names = None
 
         # Init database connection
         self.connection = None
@@ -95,6 +101,11 @@ class Cinfdata(object):
         self.cache = None
         if use_caching:
             self.cache = Cache(cache_dir, setup_name)
+
+        # Init the metadata named tuple (we need database for this)
+        self._metadata_as_named_tuple = metadata_as_named_tuple
+        if metadata_as_named_tuple:
+            self._metadata_named_tuple = namedtuple('Metadata', self.column_names)
 
     def _init_database_connection(self, local_forward_port):
         """Initialize the database connection"""
@@ -123,13 +134,12 @@ class Cinfdata(object):
     def get_data(self, measurement_id):
         """Get data for measurement_id"""
         # Check if this dataset is in the cache and if so return
+        data = None
         if self.cache:
             data = self.cache.load_data(measurement_id)
-            if data is not None:
-                return data
 
         # Try and get the dataset from the database
-        if self.cursor is not None:
+        if data is None and self.cursor is not None:
             start = time()
             self.cursor.execute(self.data_query, measurement_id)
             data = np.array(self.cursor.fetchall())
@@ -139,14 +149,81 @@ class Cinfdata(object):
             if data.size > 0:
                 if self.cache:
                     self.cache.save_data(measurement_id, data)
-                return data
 
-        error = 'No data found for id {}'.format(measurement_id)
-        raise CinfdataError(error)
+        if data is None:
+            error = 'No data found for id {}'.format(measurement_id)
+            raise CinfdataError(error)
 
-    def get_metadata(measurement_id):
-        pass
+        return data
 
+    def get_metadata(self, measurement_id):
+        """Get metadata for measurement_id"""
+        # Check if the metadata is in the cache
+        metadata = None
+        if self.cache:
+            metadata = self.cache.load_metadata(measurement_id)
+
+        # Try and get the metadata from the database
+        if metadata is None and self.cursor is not None:
+            # Get the data
+            start = time()
+            self.cursor.execute(self.metadata_query, measurement_id)
+            metadata_raw = self.cursor.fetchall()
+            LOG.debug('Fetched metadata for id %s from database in %0.4e s', measurement_id, time() - start)
+
+            # Raise error if there was not exactly 1 line
+            if len(metadata_raw) != 1:
+                raise CinfdataError('There was not exactly 1 row of metadata returned '
+                                    'for id {}'.format(measurement_id))
+
+            # Convert metadata to dict
+            metadata = dict(zip(self.column_names, metadata_raw[0]))
+
+            # Save in cache if present
+            if self.cache:
+                self.cache.save_metadata(measurement_id, metadata)
+
+        # Raise error if we could not find any metadata
+        if metadata is None:
+            raise CinfdataError('No metadata found for id {}'.format(measurement_id))
+
+        # Convert to namedtuple if requested
+        if self._metadata_as_named_tuple:
+            metadata = self._metadata_named_tuple(**metadata)
+
+        return metadata
+
+
+    def _pack_metadata(self, metadata):
+        """Pack the metadata into a dict"""
+        return 
+        
+
+    @property
+    def column_names(self):
+        """Return the columns names from the measurements table"""
+        # Note, this could be done cleverer with a lazy property implementation, but it
+        # is more difficult to read
+        if self._column_names is not None:
+            return self._column_names
+
+        # Check if the column names is in the cache
+        if self.cache:
+            column_names = self.cache.load_metadata('column_names')
+            if column_names is not None:
+                self._column_names = column_names
+                return column_names
+
+        # Try and get the column names from the database
+        if self.cursor is not None:
+            self.cursor.execute('DESCRIBE measurements_{}'.format(self.setup_name))
+            column_names = [item[0] for item in self.cursor.fetchall()]
+            self._column_names = column_names
+            if self.cache:
+                self.cache.save_metadata('column_names', column_names)
+            return column_names
+
+        raise CinfdataError('Column names not found')
 
 class CinfdataCacheError(Exception):
     """Exception for Cinfdata Cache related errors"""
@@ -257,15 +334,29 @@ class Cache(object):
         LOG.debug('Loaded data for id %s from cache in %0.4e s', measurement_id, time() - start)
         return data
 
-    def save_metadata(self, measurement_id, metadata):
-        """Save a meta dataset to the cache"""
+    def save_metadata(self, key, metadata):
+        """Save a metadata for a key to the cache
+
+        .. note:: This function is used both to save metadata for measurements and other
+            data that neede to be cached across script runs
+
+        Args:
+            key (int or str): The key to save the metadata under. This can either be the
+                integer id of a measurements (e.g. 27431) or a text string for save other
+                data (e.g. 'column_names')
+            metadata (dict or list): The metadata to save under ``key``
+
+        Raises:
+            CinfdataCacheError: On problems saving the metadata to disk
+
+        """
         start = time()
-        self.metadata[measurement_id] = metadata
+        self.metadata[key] = metadata
         self._save_metadatafile_to_file()
-        LOG.debug('Saved metadata for id %s to cache in %0.4e s', measurement_id, time() - start)
+        LOG.debug('Saved metadata for key %s to cache in %0.4e s', key, time() - start)
 
     def _save_metadatafile_to_file(self):
-        """Save all the metadata to a file"""
+        """Save the metadata dict to a file"""
         error = None
         try:
             with open(self.metadata_file, 'wb') as file_:
@@ -278,17 +369,29 @@ class Cache(object):
         if error is not None:
             raise CinfdataCacheError(error)
 
-    def load_metadata(self, measurement_id):
-        """Load a meta dataset from the cache"""
+    def load_metadata(self, key):
+        """Load a meta dataset from the cache
+
+        Args:
+            key (int or str): The key to save the metadata under. This can either be the
+                integer id of a measurements (e.g. 27431) or a text string for save other
+                data (e.g. 'column_names')
+        """
         start = time()
-        metadata = self.metadata.get(measurement_id)
-        LOG.debug('Loaded metadata for id %s from cache in %0.4e s', measurement_id, time() - start)
+        metadata = self.metadata.get(key)
+        if metadata is not None:
+            LOG.debug('Loaded metadata for key %s from cache in %0.4e s', key, time() - start)
         return metadata
 
 
 def test():
-    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG')
-    data = cinfdata.get_data(16721)
+    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG', metadata_as_named_tuple=True)
+    data = cinfdata.get_data(26297)
+    print(cinfdata.get_metadata(26297))
+    from matplotlib import pyplot as plt
+    plt.plot(data[:, 0], data[:, 1])
+    plt.show()
+    
 
 
 if __name__ == '__main__':
