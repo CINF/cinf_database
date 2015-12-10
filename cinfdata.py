@@ -1,4 +1,7 @@
-# pylint: disable=no-member,import-error
+# pylint: disable=no-member,import-error,invalid-name,too-many-instance-attributes
+# pylint: disable=too-many-arguments
+
+"""Convinience interface to the cinfdata database"""
 
 from __future__ import unicode_literals, print_function
 
@@ -87,7 +90,8 @@ class Cinfdata(object):
 
         # Init local variables
         self.setup_name = setup_name
-        self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s ORDER BY id'.format(setup_name)
+        self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
+                          'ORDER BY id'.format(setup_name)
         self.metadata_query = 'SELECT * FROM measurements_{} WHERE id=%s'.format(setup_name)
         self._column_names = None
 
@@ -143,7 +147,8 @@ class Cinfdata(object):
             start = time()
             self.cursor.execute(self.data_query, measurement_id)
             data = np.array(self.cursor.fetchall())
-            LOG.debug('Fetched data for id %s from database in %0.4e s', measurement_id, time() - start)
+            LOG.debug('Fetched data for id %s from database in %0.4e s', measurement_id,
+                      time() - start)
 
             # If there was data in the db, possibly save to cache and return
             if data.size > 0:
@@ -169,7 +174,8 @@ class Cinfdata(object):
             start = time()
             self.cursor.execute(self.metadata_query, measurement_id)
             metadata_raw = self.cursor.fetchall()
-            LOG.debug('Fetched metadata for id %s from database in %0.4e s', measurement_id, time() - start)
+            LOG.debug('Fetched metadata for id %s from database in %0.4e s',
+                      measurement_id, time() - start)
 
             # Raise error if there was not exactly 1 line
             if len(metadata_raw) != 1:
@@ -192,12 +198,6 @@ class Cinfdata(object):
             metadata = self._metadata_named_tuple(**metadata)
 
         return metadata
-
-
-    def _pack_metadata(self, metadata):
-        """Pack the metadata into a dict"""
-        return 
-        
 
     @property
     def column_names(self):
@@ -225,7 +225,8 @@ class Cinfdata(object):
 
         raise CinfdataError('Column names not found')
 
-class CinfdataCacheError(Exception):
+
+class CinfdataCacheError(CinfdataError):
     """Exception for Cinfdata Cache related errors"""
 
 
@@ -246,7 +247,30 @@ class Cache(object):
         self.setup_dir = path.join(self.cache_dir, setup_name)
         self.data_dir = path.join(self.setup_dir, 'data')
         dirs = [self.cache_dir, self.setup_dir, self.data_dir]
+        # Check permission on dirs and create them if possible
+        self._check_and_create_dirs(dirs)
 
+        # Form metadata file path and load if present
+        self.metadata_file = path.join(self.setup_dir, 'metadata.pickle')
+        if path.exists(self.metadata_file):
+            error = None
+            try:
+                with open(self.metadata_file, 'rb') as file_:
+                    self.metadata = cPickle.load(file_)
+            except IOError:
+                error = 'The file: {}\nwhich is needed for the cache, exists, but is '\
+                        'not readable'
+            except cPickle.UnpicklingError:
+                error = 'Loading and interpreting the metadat file: {}\nfailed. '\
+                        'Please report this as a bug.'
+            if error is not None:
+                raise CinfdataCacheError(error.format(self.metadata_file))
+        else:
+            self.metadata = {}
+
+    @staticmethod
+    def _check_and_create_dirs(dirs):
+        """Check permissions of the cache directories and create them if necessayr"""
         # Check/create directories
         for dir_ in dirs:
             if path.exists(dir_):
@@ -258,10 +282,10 @@ class Cache(object):
                             'exists, but is not a directory'
                 if not os.access(dir_, os.W_OK):
                     error = 'The directory: {}\nwhich is needed for the cache exists, '\
-                            'but us not writeable'
+                            'but is not writeable'
                 if not os.access(dir_, os.R_OK):
                     error = 'The directory: {}\nwhich is needed for the cache exists, '\
-                            'but us not readable'
+                            'but is not readable'
                 if error is not None:
                     raise CinfdataCacheError(error.format(dir_))
             else:
@@ -272,23 +296,6 @@ class Cache(object):
                     error = 'Creation of the directory: {}\n which is neede for the '\
                             'cache failed. Please check permissions of the parent folder.'
                     raise CinfdataCacheError(error.format(dir_))
-
-        # Form metadata file path and load if present
-        self.metadata_file = path.join(self.setup_dir, 'metadata.pickle')
-        if path.exists(self.metadata_file):
-            error = None
-            try:
-                with open(self.metadata_file, 'rb') as file_:
-                    self.metadata = cPickle.load(file_)
-            except IOError:
-                error = 'The file: {}\nwhich is needed for the cache, exists, but is not readable'
-            except cPickle.UnpicklingError:
-                error = 'Loading and interpreting the metadat file: {}\nfailed. '\
-                        'Please report this as a bug.'
-            if error is not None:
-                raise CinfdataCacheError(error.format(self.metadata_file))
-        else:
-            self.metadata = {}
 
     def save_data(self, measurement_id, data):
         """Save a dataset to the cache
@@ -331,7 +338,8 @@ class Cache(object):
             message = 'The cache file:\n{}\nexists, but could not be loaded. '\
                       'Check file permissions'
             raise CinfdataCacheError(message.format(filepath))
-        LOG.debug('Loaded data for id %s from cache in %0.4e s', measurement_id, time() - start)
+        LOG.debug('Loaded data for id %s from cache in %0.4e s', measurement_id,
+                  time() - start)
         return data
 
     def save_metadata(self, key, metadata):
@@ -384,15 +392,16 @@ class Cache(object):
         return metadata
 
 
-def test():
-    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG', metadata_as_named_tuple=True)
+def run_module():
+    """Run the module"""
+    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG',
+                        metadata_as_named_tuple=True)
     data = cinfdata.get_data(26297)
     print(cinfdata.get_metadata(26297))
     from matplotlib import pyplot as plt
     plt.plot(data[:, 0], data[:, 1])
     plt.show()
-    
 
 
 if __name__ == '__main__':
-    test()
+    run_module()
