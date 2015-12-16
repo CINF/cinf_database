@@ -1,0 +1,3 @@
+We should not save arrays where arr.dtype.hasobject is True, it is an array that contains Python objects, and it will be serialized with pickle.
+
+Use .npy extension
