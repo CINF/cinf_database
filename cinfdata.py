@@ -65,12 +65,12 @@ class Cinfdata(object):
         Args:
             setup_name (str): The setup name used as a table name prefix in the database.
                 E.g. 'vhp' or 'stm312'.
-            local_forward_port (int): The local port number that a port forwards to the
+            local_forward_port (int): The local port number that a port forward to the
                 database was created on. Default is 9999.
             use_caching (bool): If set to True, this module will locally cache data and
                 metadata. WARNING: DO NOT use caching unless you understand the limitations.
             cache_dir (str): The directory to use for the cache. As default is used a
-                directory named 'cache' in the same folder as this file (cinfdata.py) is
+                directory named 'cache' in the same folder that this file (cinfdata.py) is
                 located in
             cache_only (bool): If set to True, no connection will be formed to the database
             log_level (str): A string that indicates the log level, either 'INFO' (default)
@@ -78,10 +78,12 @@ class Cinfdata(object):
 
         .. warning:: Be careful with caching. It will keep returning the version of the
             data from the first time it was retrieved. If data is later added to the
-            database or it is altered, the data that this module returns, when using
-            caching will not reflect it.
+            dataset or it is altered, the data that this module returns, when using
+            caching, will not reflect it.
 
         """
+        start = time()
+
         # Setup logging
         if log_level == 'DEBUG':
             LOG.setLevel(logging.DEBUG)
@@ -110,6 +112,8 @@ class Cinfdata(object):
         self._metadata_as_named_tuple = metadata_as_named_tuple
         if metadata_as_named_tuple:
             self._metadata_named_tuple = namedtuple('Metadata', self.column_names)
+
+        LOG.debug('Completed init in %s s', time() - start)
 
     def _init_database_connection(self, local_forward_port):
         """Initialize the database connection"""
@@ -166,7 +170,7 @@ class Cinfdata(object):
         # Check if the metadata is in the cache
         metadata = None
         if self.cache:
-            metadata = self.cache.load_metadata(measurement_id)
+            metadata = self.cache.load_infoitem(measurement_id)
 
         # Try and get the metadata from the database
         if metadata is None and self.cursor is not None:
@@ -187,7 +191,7 @@ class Cinfdata(object):
 
             # Save in cache if present
             if self.cache:
-                self.cache.save_metadata(measurement_id, metadata)
+                self.cache.save_infoitem(measurement_id, metadata)
 
         # Raise error if we could not find any metadata
         if metadata is None:
@@ -209,7 +213,7 @@ class Cinfdata(object):
 
         # Check if the column names is in the cache
         if self.cache:
-            column_names = self.cache.load_metadata('column_names')
+            column_names = self.cache.load_infoitem('column_names')
             if column_names is not None:
                 self._column_names = column_names
                 return column_names
@@ -217,10 +221,18 @@ class Cinfdata(object):
         # Try and get the column names from the database
         if self.cursor is not None:
             self.cursor.execute('DESCRIBE measurements_{}'.format(self.setup_name))
-            column_names = [item[0] for item in self.cursor.fetchall()]
+            description = self.cursor.fetchall()
+            column_names = [item[0] for item in description]
+            metadata_names = [item[0] for item in description]
+            # FIXME complete this
+            for des in description:
+                if des[1] == 'timestamp':
+                    pass
+                    #print(des)
+
             self._column_names = column_names
             if self.cache:
-                self.cache.save_metadata('column_names', column_names)
+                self.cache.save_infoitem('column_names', column_names)
             return column_names
 
         raise CinfdataError('Column names not found')
@@ -242,31 +254,32 @@ class Cache(object):
             self.cache_dir = cache_dir
         LOG.info('Using cache dir: %s', self.cache_dir)
 
-        # Form folder paths, subfolder for each setup and under that subfolders for data
-        # and metadata
+        # Form folder paths, subfolder for each setup and under that a subfolders for data
         self.setup_dir = path.join(self.cache_dir, setup_name)
         self.data_dir = path.join(self.setup_dir, 'data')
         dirs = [self.cache_dir, self.setup_dir, self.data_dir]
         # Check permission on dirs and create them if possible
         self._check_and_create_dirs(dirs)
 
-        # Form metadata file path and load if present
-        self.metadata_file = path.join(self.setup_dir, 'metadata.pickle')
-        if path.exists(self.metadata_file):
+        # Form infoitem file path and load if present
+        self.infoitem_file = path.join(self.setup_dir, 'infoitem.pickle')
+        if path.exists(self.infoitem_file):
             error = None
             try:
-                with open(self.metadata_file, 'rb') as file_:
-                    self.metadata = cPickle.load(file_)
+                start = time()
+                with open(self.infoitem_file, 'rb') as file_:
+                    self.infoitem = cPickle.load(file_)
+                LOG.debug('Loaded infoitem dict in %s s', time() - start)
             except IOError:
                 error = 'The file: {}\nwhich is needed for the cache, exists, but is '\
                         'not readable'
             except cPickle.UnpicklingError:
-                error = 'Loading and interpreting the metadat file: {}\nfailed. '\
+                error = 'Loading and interpreting the infoitem file: {}\nfailed. '\
                         'Please report this as a bug.'
             if error is not None:
-                raise CinfdataCacheError(error.format(self.metadata_file))
+                raise CinfdataCacheError(error.format(self.infoitem_file))
         else:
-            self.metadata = {}
+            self.infoitem = {}
 
     @staticmethod
     def _check_and_create_dirs(dirs):
@@ -342,66 +355,74 @@ class Cache(object):
                   time() - start)
         return data
 
-    def save_metadata(self, key, metadata):
-        """Save a metadata for a key to the cache
-
-        .. note:: This function is used both to save metadata for measurements and other
-            data that neede to be cached across script runs
+    def save_infoitem(self, key, infoitem):
+        """Save various information in a cached dictionary
 
         Args:
-            key (int or str): The key to save the metadata under. This can either be the
-                integer id of a measurements (e.g. 27431) or a text string for save other
-                data (e.g. 'column_names')
-            metadata (dict or list): The metadata to save under ``key``
+            key (dict key): The key to save this information item under. The type if this
+                key varies depending of the type of item saved. See description below.
+            infoitem (object): The information object to save under ``key``
+
+        Three different kinds of information object are saved:
+
+        * **Metadata** from the database. This is saved in the form of a dictionary and
+          saved under an integer key, which is the dataset id.
+        * **Group information**. The group information is saved as a list of datasets ids
+          which is contained in a group and saved under a key which is a tuple of ???FIXME
+        * **Program settings**. Various settings for this program is saved under string
+          keys.
 
         Raises:
-            CinfdataCacheError: On problems saving the metadata to disk
+            CinfdataCacheError: If there are problems with saving the metadata to disk
 
         """
         start = time()
-        self.metadata[key] = metadata
-        self._save_metadatafile_to_file()
-        LOG.debug('Saved metadata for key %s to cache in %0.4e s', key, time() - start)
+        self.infoitem[key] = infoitem
+        self._save_infoitems_to_file()
+        LOG.debug('Saved infoitem for key %s to cache in %0.4e s', key, time() - start)
 
-    def _save_metadatafile_to_file(self):
-        """Save the metadata dict to a file"""
+    def _save_infoitems_to_file(self):
+        """Save the infoitem dict to file"""
         error = None
         try:
-            with open(self.metadata_file, 'wb') as file_:
-                cPickle.dump(self.metadata, file_)
+            with open(self.infoitem_file, 'wb') as file_:
+                cPickle.dump(self.infoitem, file_)
         except IOError:
             error = 'The file: {}\nwhich is needed by the cache is not writable. '\
-                    'Check the file permissions.'
+                    'Check the file permissions.'.format(self.infoitem_file)
         except cPickle.PickleError:
-            error = 'Python was unable to save the metadata dict. Report this as a bug.'
+            error = 'Python was unable to save the infoitem dict. Report this as a bug.'
         if error is not None:
             raise CinfdataCacheError(error)
 
-    def load_metadata(self, key):
-        """Load a meta dataset from the cache
+    def load_infoitem(self, key):
+        """Load information from a cached dictionary
 
         Args:
-            key (int or str): The key to save the metadata under. This can either be the
-                integer id of a measurements (e.g. 27431) or a text string for save other
-                data (e.g. 'column_names')
+            key (dict key): See the docstring for :meth:`save_infoitem` for a description
+                of key
         """
         start = time()
-        metadata = self.metadata.get(key)
+        metadata = self.infoitem.get(key)
         if metadata is not None:
-            LOG.debug('Loaded metadata for key %s from cache in %0.4e s', key, time() - start)
+            LOG.debug('Loaded infoitem for key %s from cache in %0.4e s', key, time() - start)
         return metadata
 
 
 def run_module():
     """Run the module"""
-    cinfdata = Cinfdata('dummy', use_caching=True, log_level='DEBUG',
+    cinfdata = Cinfdata('tof', use_caching=False, log_level='DEBUG',
                         metadata_as_named_tuple=True)
-    data = cinfdata.get_data(26297)
-    print(cinfdata.get_metadata(26297))
-    from matplotlib import pyplot as plt
-    plt.plot(data[:, 0], data[:, 1])
-    plt.show()
+    cinfdata.cursor.execute('select id from measurements_tof')
+    ids = [element[0] for element in cinfdata.cursor.fetchall()]
 
+
+    #for n, id_ in enumerate(ids):
+    #    print(n, 'of', len(ids))
+        #cinfdata.get_data(id_)
+    #    cinfdata.get_metadata(id_)
+    #print(len(ids))
+    #print(ids)
 
 if __name__ == '__main__':
     run_module()
