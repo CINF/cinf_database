@@ -9,7 +9,11 @@ from os import path
 import os
 import sys
 from time import time
-import cPickle
+# Py 2/3 compatible import of pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 import logging
 from collections import namedtuple
 
@@ -149,7 +153,7 @@ class Cinfdata(object):
         # Try and get the dataset from the database
         if data is None and self.cursor is not None:
             start = time()
-            self.cursor.execute(self.data_query, measurement_id)
+            self.cursor.execute(self.data_query, (measurement_id,))
             data = np.array(self.cursor.fetchall())
             LOG.debug('Fetched data for id %s from database in %0.4e s', measurement_id,
                       time() - start)
@@ -176,7 +180,7 @@ class Cinfdata(object):
         if metadata is None and self.cursor is not None:
             # Get the data
             start = time()
-            self.cursor.execute(self.metadata_query, measurement_id)
+            self.cursor.execute(self.metadata_query, (measurement_id,))
             metadata_raw = self.cursor.fetchall()
             LOG.debug('Fetched metadata for id %s from database in %0.4e s',
                       measurement_id, time() - start)
@@ -408,6 +412,7 @@ def run_module():
     """Run the module"""
     cinfdata = Cinfdata('tof', use_caching=False, log_level='DEBUG',
                         metadata_as_named_tuple=True)
+    print(cinfdata.get_data('4100'))
     print(cinfdata.get_metadata('4100'))
 
 
