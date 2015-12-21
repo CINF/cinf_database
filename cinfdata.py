@@ -94,7 +94,7 @@ class Cinfdata(object):
         self.setup_name = setup_name
         self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
                           'ORDER BY id'.format(setup_name)
-        self.metadata_query = 'SELECT * FROM measurements_{} WHERE id=%s'.format(setup_name)
+        self.metadata_query = 'SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} WHERE id=%s'.format(setup_name)
         self._column_names = None
 
         # Init database connection
@@ -221,14 +221,9 @@ class Cinfdata(object):
         # Try and get the column names from the database
         if self.cursor is not None:
             self.cursor.execute('DESCRIBE measurements_{}'.format(self.setup_name))
-            description = self.cursor.fetchall()
-            column_names = [item[0] for item in description]
-            metadata_names = [item[0] for item in description]
-            # FIXME complete this
-            for des in description:
-                if des[1] == 'timestamp':
-                    pass
-                    #print(des)
+            column_names = [item[0] for item in self.cursor.fetchall()]
+            # Add an fictitious column, which will contain time converted to unixtime 
+            column_names.append('unixtime')
 
             self._column_names = column_names
             if self.cache:
@@ -413,16 +408,8 @@ def run_module():
     """Run the module"""
     cinfdata = Cinfdata('tof', use_caching=False, log_level='DEBUG',
                         metadata_as_named_tuple=True)
-    cinfdata.cursor.execute('select id from measurements_tof')
-    ids = [element[0] for element in cinfdata.cursor.fetchall()]
+    print(cinfdata.get_metadata('4100'))
 
-
-    #for n, id_ in enumerate(ids):
-    #    print(n, 'of', len(ids))
-        #cinfdata.get_data(id_)
-    #    cinfdata.get_metadata(id_)
-    #print(len(ids))
-    #print(ids)
 
 if __name__ == '__main__':
     run_module()
