@@ -3,8 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to Cinfdata Database Client's documentation!
-====================================================
+Welcome to the documentation for the Cinfdata Database Client!
+==============================================================
 
 Cinfdata Client is a simple Python module for accessing and caching data from the Cinfdata
 database. The use of the module could look something like this::
@@ -22,12 +22,8 @@ database. The use of the module could look something like this::
     plt.title(metadata['Comment'])
     plt.show()
 
-To get started please start by reading the short :ref:`introduction`. It contains some
-important information about the dangers of locally caching data that is worth reading
-**before** starting to use the module. After this, dive into one of the :ref:`examples`,
-that aims to covers all the different ways the module can be used. If you need detailed
-information about the calling signature of methods etc. have a look in the :ref:`api`.
-
+To get started, please start by reading the first few sections of the
+:ref:`introduction`. Then have a look at the :ref:`examples` or the :ref:`api`.
 
 Contents
 ========
