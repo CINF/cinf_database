@@ -267,12 +267,12 @@ class Cache(object):
             try:
                 start = time()
                 with open(self.infoitem_file, 'rb') as file_:
-                    self.infoitem = cPickle.load(file_)
+                    self.infoitem = pickle.load(file_)
                 LOG.debug('Loaded infoitem dict in %s s', time() - start)
             except IOError:
                 error = 'The file: {}\nwhich is needed for the cache, exists, but is '\
                         'not readable'
-            except cPickle.UnpicklingError:
+            except pickle.UnpicklingError:
                 error = 'Loading and interpreting the infoitem file: {}\nfailed. '\
                         'Please report this as a bug.'
             if error is not None:
@@ -385,11 +385,11 @@ class Cache(object):
         error = None
         try:
             with open(self.infoitem_file, 'wb') as file_:
-                cPickle.dump(self.infoitem, file_)
+                pickle.dump(self.infoitem, file_)
         except IOError:
             error = 'The file: {}\nwhich is needed by the cache is not writable. '\
                     'Check the file permissions.'.format(self.infoitem_file)
-        except cPickle.PickleError:
+        except pickle.PickleError:
             error = 'Python was unable to save the infoitem dict. Report this as a bug.'
         if error is not None:
             raise CinfdataCacheError(error)
@@ -410,10 +410,17 @@ class Cache(object):
 
 def run_module():
     """Run the module"""
-    cinfdata = Cinfdata('tof', use_caching=False, log_level='DEBUG',
-                        metadata_as_named_tuple=True)
-    print(cinfdata.get_data('4100'))
-    print(cinfdata.get_metadata('4100'))
+    cinfdata = Cinfdata('tof', use_caching=True, log_level='DEBUG')
+    cursor = cinfdata.cursor
+
+    def get_data(dataid):
+        """Get data from the database"""
+        query = 'SELECT x, y FROM xy_values_dummy WHERE measurement=%s'
+	cursor.execute(query, [dataid])
+	all_rows = cursor.fetchall()
+	return np.array(all_rows)
+
+    print(get_data(19800))
 
 
 if __name__ == '__main__':
