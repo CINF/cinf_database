@@ -3,5 +3,7 @@
 Source Code Documentation (API)
 ===============================
 
-Hallo
-
+.. automodule:: cinfdata
+   :members:
+   :member-order: bysource
+   :show-inheritance:
