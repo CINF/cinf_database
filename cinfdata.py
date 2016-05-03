@@ -416,9 +416,9 @@ def run_module():
     def get_data(dataid):
         """Get data from the database"""
         query = 'SELECT x, y FROM xy_values_dummy WHERE measurement=%s'
-	cursor.execute(query, [dataid])
-	all_rows = cursor.fetchall()
-	return np.array(all_rows)
+        cursor.execute(query, [dataid])
+        all_rows = cursor.fetchall()
+        return np.array(all_rows)
 
     print(get_data(19800))
 
