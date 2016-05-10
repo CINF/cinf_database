@@ -1,7 +1,7 @@
 from cinfdata import Cinfdata
 from matplotlib import pyplot as plt
 
-db = Cinfdata('stm312', use_caching=True)
+db = Cinfdata('stm312')
 spectrum = db.get_data(6688)
 metadata = db.get_metadata(6688)
 

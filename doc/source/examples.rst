@@ -49,10 +49,10 @@ example. Many of the following examples will build of this one.
        'time': datetime.datetime(2014, 12, 17, 10, 13, 8), 'excitation_energy': None, 'type': 4L,
        'id': 6688L, 'name': None}
 
-Simple example with plot
+Simple Example with Plot
 ------------------------
 
-
+`Code <https://github.com/CINF/cinf_database/blob/master/examples/simple_with_plot.py>`_
 
 To make a plot that uses e.g. the `comment` fielde of the metadata as
 the title, :ref:`simplest-example` can be expanded into::
@@ -73,6 +73,46 @@ the title, :ref:`simplest-example` can be expanded into::
           columns in a numpy array, so they are retrieved individually
           with the `[:, 0]` syntax
 
+Simple Example Using the Cache
+------------------------------
+
+`Code <https://github.com/CINF/cinf_database/blob/master/examples/simple_with_cache.py>`_
+
+To enable caching of the database results (which is disabled by
+default) simply instantiate the :class:`Cinfdata` object with
+`use_caching=True`::
+
+  from cinfdata import Cinfdata
+
+  db = Cinfdata('stm312', use_caching=True)
+  spectrum = db.get_data(6688)
+  metadata = db.get_metadata(6688)
+
+Except from the instantiation argument, the usage is exactly the
+same. If the folder of the cinfdata.py file, there will now be a cache
+folder with the following content::
+
+  cache
+  └── stm312
+      ├── data
+      │   └── 6688.npy
+      └── infoitem.pickle
+
+A folder for each of the setups being used (``stm312`` in this
+case). Under that, there is the ``data`` folder, that contains one
+file (named ``meaurement_id.npy``\ [#npy]_) for each data set and
+there is the infoitem.pickle ([#pickle]) that contains all the
+metadata.
+
+.. important:: Due to the use of native data saving functionality and
+               the use of pickle, the cache **cannot** be used across
+               different operating systems or Pythons versions. Only
+               use on **one** machine and **one** Python version. If
+               you need to switch machines or Python version you
+               shoule reset the cache.
+
+To reset the cache simply delete the cache folder.
+
 .. rubric:: Footnotes
 
 .. [#shortnames] In general, Python users are encouraged to make
@@ -84,3 +124,12 @@ the title, :ref:`simplest-example` can be expanded into::
                  np, Pyplot as plt etc.). Besides, cinfdb, is close to
                  readable, 'db' is a common abbreaviation for database
                  and all readers should know what Cinf is.
+.. [#npy] npy is numpys own save format for arrays. It it very
+          efficient because it contains just a small header, that
+          contains the array dimensions and the data type and then
+          just the raw bytes that describes the numbers.
+.. [#pickle] pickle is Python serialization format for serialization
+             of (almost) arbitrary arguments. The format is not
+             guarantied to be preserved across Python version, which
+             is one of the reasons that the cache should not be used
+             across Python versions.
