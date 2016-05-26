@@ -98,7 +98,8 @@ class Cinfdata(object):
         self.setup_name = setup_name
         self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
                           'ORDER BY id'.format(setup_name)
-        self.metadata_query = 'SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} WHERE id=%s'.format(setup_name)
+        self.metadata_query = ('SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} '
+                               'WHERE id=%s'.format(setup_name))
         self._column_names = None
 
         # Init database connection
@@ -174,7 +175,9 @@ class Cinfdata(object):
         # Check if the metadata is in the cache
         metadata = None
         if self.cache:
-            metadata = self.cache.load_infoitem(measurement_id)
+            if self.cache.has_infoitem('metadata', measurement_id):
+                metadata = self.cache.load_infoitem('metadata', measurement_id)
+            
 
         # Try and get the metadata from the database
         if metadata is None and self.cursor is not None:
@@ -195,7 +198,7 @@ class Cinfdata(object):
 
             # Save in cache if present
             if self.cache:
-                self.cache.save_infoitem(measurement_id, metadata)
+                self.cache.save_infoitem('metadata', measurement_id, metadata)
 
         # Raise error if we could not find any metadata
         if metadata is None:
@@ -216,11 +219,9 @@ class Cinfdata(object):
             return self._column_names
 
         # Check if the column names is in the cache
-        if self.cache:
-            column_names = self.cache.load_infoitem('column_names')
-            if column_names is not None:
-                self._column_names = column_names
-                return column_names
+        if self.cache and self.cache.has_infoitem('general', 'column_names'):
+            self._column_names = self.cache.load_infoitem('general', 'column_names')
+            return self._column_names
 
         # Try and get the column names from the database
         if self.cursor is not None:
@@ -231,7 +232,7 @@ class Cinfdata(object):
 
             self._column_names = column_names
             if self.cache:
-                self.cache.save_infoitem('column_names', column_names)
+                self.cache.save_infoitem('general', 'column_names', column_names)
             return column_names
 
         raise CinfdataError('Column names not found')
@@ -242,7 +243,9 @@ class CinfdataCacheError(CinfdataError):
 
 
 class Cache(object):
-    """Simple file base cache for cinf database loopkups"""
+    """Simple file based cache for cinf database loopkups"""
+
+    cache_version = 2
 
     def __init__(self, cache_dir, setup_name):
         """Initialize local variables"""
@@ -277,12 +280,23 @@ class Cache(object):
                         'Please report this as a bug.'
             if error is not None:
                 raise CinfdataCacheError(error.format(self.infoitem_file))
+
+            loaded_cache_version = self.infoitem.get('general', {}).get('cache_version', 1)
+            if loaded_cache_version < self.cache_version:
+                message = ('Your cache is of the older version {}, wheres cinfdata now '
+                           'uses {}. Please delete your cache dir and start building it '
+                           'from scratch.')
+                raise CinfdataError(message.format(loaded_cache_version, self.version))
         else:
-            self.infoitem = {}
+            self.infoitem = {
+                'general': {'cache_version': self.cache_version},
+                'metadata': {},
+                'groups': {},
+            }
 
     @staticmethod
     def _check_and_create_dirs(dirs):
-        """Check permissions of the cache directories and create them if necessayr"""
+        """Check permissions of the cache directories and create them if necessary"""
         # Check/create directories
         for dir_ in dirs:
             if path.exists(dir_):
@@ -354,31 +368,30 @@ class Cache(object):
                   time() - start)
         return data
 
-    def save_infoitem(self, key, infoitem):
+    def save_infoitem(self, group_name, key, infoitem):
         """Save various information in a cached dictionary
 
         Args:
-            key (dict key): The key to save this information item under. The type if this
-                key varies depending of the type of item saved. See description below.
+            group_name (unicode): The group of infoitems to save in. Currently supported
+                groups are: 'general'; for general program settings, 'metadata'; to save
+                metadata in and 'group'; to save group information in.
+            key (dict key): The key to save this information item under
             infoitem (object): The information object to save under ``key``
-
-        Three different kinds of information object are saved:
-
-        * **Metadata** from the database. This is saved in the form of a dictionary and
-          saved under an integer key, which is the dataset id.
-        * **Group information**. The group information is saved as a list of datasets ids
-          which is contained in a group and saved under a key which is a tuple of ???FIXME
-        * **Program settings**. Various settings for this program is saved under string
-          keys.
 
         Raises:
             CinfdataCacheError: If there are problems with saving the metadata to disk
 
         """
         start = time()
-        self.infoitem[key] = infoitem
+        try:
+            group = self.infoitem[group_name]
+        except KeyError:
+            message = 'The group name \'{}\' is invalid. Only {} are allowed.'
+            raise CinfdataCacheError(message.format(group_name, self.infoitem.keys()))
+        group[key] = infoitem
         self._save_infoitems_to_file()
-        LOG.debug('Saved infoitem for key %s to cache in %0.4e s', key, time() - start)
+        LOG.debug('Saved infoitem for group \'%s\', key \'%s\' to cache in %0.4e s',
+                  group_name, key, time() - start)
 
     def _save_infoitems_to_file(self):
         """Save the infoitem dict to file"""
@@ -394,34 +407,34 @@ class Cache(object):
         if error is not None:
             raise CinfdataCacheError(error)
 
-    def load_infoitem(self, key):
+    def load_infoitem(self, group_name, key):
         """Load information from a cached dictionary
 
         Args:
-            key (dict key): See the docstring for :meth:`save_infoitem` for a description
-                of key
+            group_name (unicode): The group to load the infoitem from
+            key (dict key): The key of the infoitem to load
         """
         start = time()
-        metadata = self.infoitem.get(key)
-        if metadata is not None:
-            LOG.debug('Loaded infoitem for key %s from cache in %0.4e s', key, time() - start)
+        try:
+            group = self.infoitem[group_name]
+        except KeyError:
+            message = 'The group name \'{}\' is invalid. Only {} are allowed.'
+            raise CinfdataCacheError(message.format(group_name, self.infoitem.keys()))
+        metadata = group[key]
+        LOG.debug('Loaded infoitem for group \'%s\', key \'%s\' from cache in %0.4e s',
+                  group_name, key, time() - start)
         return metadata
+
+    def has_infoitem(self, group_name, key):
+        """"""
+        return group_name in self.infoitem and key in self.infoitem[group_name]
 
 
 def run_module():
     """Run the module"""
     cinfdata = Cinfdata('tof', use_caching=True, log_level='DEBUG')
-    cursor = cinfdata.cursor
-
-    def get_data(dataid):
-        """Get data from the database"""
-        query = 'SELECT x, y FROM xy_values_dummy WHERE measurement=%s'
-        cursor.execute(query, [dataid])
-        all_rows = cursor.fetchall()
-        return np.array(all_rows)
-
-    print(get_data(19800))
-
+    print(cinfdata.get_data(5417))
+    print(cinfdata.get_metadata(5417))
 
 if __name__ == '__main__':
     run_module()
