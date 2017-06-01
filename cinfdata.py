@@ -9,6 +9,7 @@ from os import path
 import os
 import sys
 from time import time
+from operator import itemgetter
 # Py 2/3 compatible import of pickle
 try:
     import cPickle as pickle
@@ -62,6 +63,7 @@ class Cinfdata(object):
     password = 'cinf_reader'
 
     def __init__(self, setup_name, local_forward_port=9999, use_caching=False,
+                 grouping_column=None, label_column=None,
                  cache_dir=None, cache_only=False, log_level='INFO',
                  metadata_as_named_tuple=False):
         """Initialize local variables
@@ -73,6 +75,10 @@ class Cinfdata(object):
                 database was created on. Default is 9999.
             use_caching (bool): If set to True, this module will locally cache data and
                 metadata. WARNING: DO NOT use caching unless you understand the limitations.
+            grouping_column (str): The name of the column used for grouping
+                column (if different from __init__ value)
+            label_column (str): The name of the column that is used for the
+                label (if different from __init__ value)
             cache_dir (str): The directory to use for the cache. As default is used a
                 directory named 'cache' in the same folder that this file (cinfdata.py) is
                 located in
@@ -94,14 +100,6 @@ class Cinfdata(object):
         elif log_level == 'DISABLE':
             LOG.setLevel(logging.CRITICAL)
 
-        # Init local variables
-        self.setup_name = setup_name
-        self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
-                          'ORDER BY id'.format(setup_name)
-        self.metadata_query = ('SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} '
-                               'WHERE id=%s'.format(setup_name))
-        self._column_names = None
-
         # Init database connection
         self.connection = None
         self.cursor = None
@@ -113,10 +111,43 @@ class Cinfdata(object):
         if use_caching:
             self.cache = Cache(cache_dir, setup_name)
 
+        # Init local variables
+        self.grouping_column = grouping_column
+        self.label_column = label_column
+        self.setup_name = setup_name
+        self._column_names = None
+
         # Init the metadata named tuple (we need database for this)
         self._metadata_as_named_tuple = metadata_as_named_tuple
         if metadata_as_named_tuple:
             self._metadata_named_tuple = namedtuple('Metadata', self.column_names)
+
+        # Figure out whether the xy_values table has an id
+        if self.cache and self.cache.has_infoitem('general', 'xy_values_table_has_id'):
+            self._xy_values_table_has_id = \
+                self.cache.load_infoitem('general', 'xy_values_table_has_id')
+        else:
+            if self.cursor is not None:
+                self.cursor.execute('DESCRIBE xy_values_{}'.format(setup_name))
+                column_names = [item[0] for item in self.cursor.fetchall()]
+                self._xy_values_table_has_id = 'id' in column_names
+                if self.cache:
+                    self.cache.save_infoitem('general', 'xy_values_table_has_id',
+                                             self._xy_values_table_has_id)
+            else:
+                CinfdataError('Could not determine if xy_values_table has id')
+
+        # Init queries
+        if self._xy_values_table_has_id:
+            self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
+                              'ORDER BY id'.format(setup_name)
+        else:
+            self.data_query = 'SELECT x, y FROM xy_values_{} WHERE measurement=%s '\
+                              'ORDER BY x'.format(setup_name)
+        self.metadata_query = ('SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} '
+                               'WHERE id=%s'.format(setup_name))
+        self.group_query = 'SELECT `id` FROM measurements_{} WHERE `{{}}` = %s order by '\
+                           'id'.format(setup_name)
 
         LOG.debug('Completed init in %s s', time() - start)
 
@@ -144,8 +175,18 @@ class Cinfdata(object):
         if self.connection is not None:
             self.cursor = self.connection.cursor()
 
-    def get_data(self, measurement_id):
-        """Get data for measurement_id"""
+    def get_data(self, measurement_id, scaling_factors=None):
+        """Get data for measurement_id
+
+        Args:
+            measurement_id (int): The id of the measurement to fetch
+            scaling_factors (sequence): A sequence of scaling factors for the
+                columns. If a value of None is supplied for any of the columns,
+                that column will not be scaled. Examples values could be (10*6, None)
+
+        Returns:
+            numpy.array: The measurement as a numpy array
+        """
         # Check if this dataset is in the cache and if so return
         data = None
         if self.cache:
@@ -168,6 +209,12 @@ class Cinfdata(object):
             error = 'No data found for id {}'.format(measurement_id)
             raise CinfdataError(error)
 
+        # Apply scaling factors
+        if scaling_factors is not None:
+            for column_number, scaling_factor in enumerate(scaling_factors):
+                if scaling_factor is not None:
+                    data[:, column_number] *= scaling_factor
+
         return data
 
     def get_metadata(self, measurement_id):
@@ -177,7 +224,7 @@ class Cinfdata(object):
         if self.cache:
             if self.cache.has_infoitem('metadata', measurement_id):
                 metadata = self.cache.load_infoitem('metadata', measurement_id)
-            
+
 
         # Try and get the metadata from the database
         if metadata is None and self.cursor is not None:
@@ -210,6 +257,109 @@ class Cinfdata(object):
 
         return metadata
 
+    def get_data_group(self, group_id, grouping_column=None, label_column=None,
+                       scaling_factors=None):
+        """Get a data group
+
+        Args:
+            group_id (object): The group id in the grouping column (can have
+                different types depending on the type of the grouping column)
+            grouping_column (str): The name of the column used for grouping
+                column (if different from __init__ value)
+            label_column (str): The name of the column that is used for the
+                label (if different from __init__ value)
+            scaling_factors (dict or sequence): If a sequence is given, it is assumed to
+                be a pair of x and y scaling factiors. Where each of the components can
+                be left out by giving a value of None. E.g: `(1E6, 1E-3)`, `(1E6, None)`
+                or `(None, 1e-3)`. If a dict if given, it is assumed to be mapping of
+                label values to scaling pairs as described above.
+
+        Returns:
+            dict: Mapping of ids to data
+
+        """
+        grouping_column = grouping_column if grouping_column is not None\
+                          else self.grouping_column
+        if grouping_column is None:
+            msg = ('A grouping_column must be given either in __init__ or in '
+                   'this method, in order to be able to get a group of data')
+            raise CinfdataError(msg)
+
+        group_key = (grouping_column, group_id)
+        try:
+            hash(group_key)
+        except TypeError:
+            msg = CinfdataError('group_id must be a immuteable type, not {}'.format(type(group_id)))
+
+        # See the group lookup is in the cache
+        ids = None
+        if self.cache and self.cache.has_infoitem('groups', group_key):
+            ids = self.cache.load_infoitem('groups', group_key)
+
+        # If not known already, try and get the group from the database
+        if ids is None and self.cursor is not None:
+            if grouping_column not in self.column_names:
+                raise CinfdataError(
+                    'Grouping column "{}" is not among the metadata column names {}'\
+                    .format(grouping_column, self.column_names)
+                )
+            self.cursor.execute(self.group_query.format(grouping_column), (group_id,))
+            ids = [row[0] for row in self.cursor.fetchall()]
+            if self.cache:
+                self.cache.save_infoitem('groups', group_key, ids)
+
+        # We need ids to proceed, so complain if they are not there
+        if ids is None:
+            raise CinfdataError('Unable to get ids for group, either from cache, '
+                                'database or both')
+
+        group_of_data = {}
+        for id_ in ids:
+            group_of_data[id_] = self.get_data(id_)
+
+        if scaling_factors is not None:
+            if isinstance(scaling_factors, dict):
+                # Make sure we have label_column
+                label_column = label_column if label_column is not None else self.label_column
+                if label_column is None:
+                    msg = ('A grouping_column must be given either in __init__ or in '
+                           'this method, in order to be able to scale based on label value')
+                    raise CinfdataError(msg)
+
+                # Scale
+                for id_, data in group_of_data.items():
+                    metadata = self.get_metadata(id_)
+                    label = metadata[label_column]
+                    if label in scaling_factors:
+                        self._scale(data, scaling_factors[label])
+
+            else:
+                for data in group_of_data.values():
+                    self._scale(data, scaling_factors)
+
+        return group_of_data
+
+    def get_metadata_group(self, group_id, grouping_column=None):
+        """"""
+        pass
+
+    def _scale(self, data, scaling_factors):
+        """Scale columns in a data set with scaling factors
+
+        Args:
+            data (numpy.array): The data to scale
+            scaling_factors (sequence): Sequence of scaling factors e.g: (1E6, 1E-3). If
+                None is passed in an as a value, that column is not scaled e.g: (1E6, None)
+
+        Return:
+            numpy.array: Same array as data, but scaled. NOTE it is the same array, not a copy
+        """
+        for column_number, scaling_factor in enumerate(scaling_factors):
+            if scaling_factor is not None:
+                data[:, column_number] *= scaling_factor
+        return data
+
+
     @property
     def column_names(self):
         """Return the columns names from the measurements table"""
@@ -227,7 +377,7 @@ class Cinfdata(object):
         if self.cursor is not None:
             self.cursor.execute('DESCRIBE measurements_{}'.format(self.setup_name))
             column_names = [item[0] for item in self.cursor.fetchall()]
-            # Add an fictitious column, which will contain time converted to unixtime 
+            # Add an fictitious column, which will contain time converted to unixtime
             column_names.append('unixtime')
 
             self._column_names = column_names
@@ -432,9 +582,25 @@ class Cache(object):
 
 def run_module():
     """Run the module"""
-    cinfdata = Cinfdata('tof', use_caching=True, log_level='DEBUG')
-    print(cinfdata.get_data(5417))
-    print(cinfdata.get_metadata(5417))
+    #cinfdata = Cinfdata('tof', use_caching=True, log_level='DEBUG')
+    #print(cinfdata.get_data(5417))
+    #print(cinfdata.get_metadata(5417))
 
+    cinfdata = Cinfdata('sniffer', use_caching=True, log_level='DEBUG',
+                        grouping_column='time', label_column='mass_label')
+    print(cinfdata.get_data(5421))
+    print(cinfdata.get_metadata(5421))
+    print()
+    datas = cinfdata.get_data_group(
+        "2017-03-17 17:42:48",
+        scaling_factors={'M4': (None, 10)},
+    )
+    from matplotlib import pyplot as plt
+    for n, data in enumerate(datas.values()):
+        if n <= 6:
+            continue
+        plt.plot(data[:, 0], data[:, 1])
+    plt.yscale('log')
+    plt.show()
 if __name__ == '__main__':
     run_module()
