@@ -340,8 +340,59 @@ class Cinfdata(object):
         return group_of_data
 
     def get_metadata_group(self, group_id, grouping_column=None):
-        """"""
-        pass
+        """Get a metadata group
+
+        Args:
+            group_id (object): The group id in the grouping column (can have
+                different types depending on the type of the grouping column)
+            grouping_column (str): The name of the column used for grouping
+                column (if different from __init__ value)
+
+        Returns:
+            dict: Mapping of ids to metadata
+
+        """
+        grouping_column = grouping_column if grouping_column is not None\
+                          else self.grouping_column
+        if grouping_column is None:
+            msg = ('A grouping_column must be given either in __init__ or in '
+                   'this method, in order to be able to get a group of metadata')
+            raise CinfdataError(msg)
+
+        group_key = (grouping_column, group_id)
+        try:
+            hash(group_key)
+        except TypeError:
+            msg = CinfdataError('group_id must be a immuteable type, not {}'.format(type(group_id)))
+
+        # See if the group lookup is in the cache
+        ids = None
+        if self.cache and self.cache.has_infoitem('groups', group_key):
+            ids = self.cache.load_infoitem('groups', group_key)
+
+        # If not known already, try and get the group from the database
+        if ids is None and self.cursor is not None:
+            if grouping_column not in self.column_names:
+                raise CinfdataError(
+                    'Grouping column "{}" is not among the metadata column names {}'\
+                    .format(grouping_column, self.column_names)
+                )
+            self.cursor.execute(self.group_query.format(grouping_column), (group_id,))
+            ids = [row[0] for row in self.cursor.fetchall()]
+            if self.cache:
+                self.cache.save_infoitem('groups', group_key, ids)
+
+        # We need ids to proceed, so complain if they are not there
+        if ids is None:
+            raise CinfdataError('Unable to get ids for group, either from cache, '
+                                'database or both')
+
+        group_of_metadata = {}
+        for id_ in ids:
+            group_of_metadata[id_] = self.get_metadata(id_)
+
+        return group_of_metadata
+
 
     def _scale(self, data, scaling_factors):
         """Scale columns in a data set with scaling factors
@@ -386,6 +437,21 @@ class Cinfdata(object):
             return column_names
 
         raise CinfdataError('Column names not found')
+
+
+def use_labels_in_groups(data_group, metadata_group, label_column):
+    """Create new data and metadata groups that use labels as columns"""
+    # Check for repeated labels
+    labels = [metadata[label_column] for metadata in metadata_group.values()]
+    if len(labels) != len(set(labels)):
+        msg = "Cannot change keys to labels because the labels are not unique"
+        raise CinfdataError(msg)
+
+    data_group_label = {metadata_group[id_][label_column]: data
+                        for id_, data in data_group.items()}
+    metadata_group_label = {metadata_group[id_][label_column]: metadata
+                            for id_, metadata in metadata_group.items()}
+    return data_group_label, metadata_group_label
 
 
 class CinfdataCacheError(CinfdataError):
