@@ -64,10 +64,10 @@ class Cinfdata(object):
 
     def __init__(self, setup_name, local_forward_port=9999, use_caching=False,
                  grouping_column=None, label_column=None,
+                 allow_wildcards=False,
                  cache_dir=None, cache_only=False, log_level='INFO',
                  metadata_as_named_tuple=False):
         """Initialize local variables
-
         Args:
             setup_name (str): The setup name used as a table name prefix in the database.
                 E.g. 'vhp' or 'stm312'.
@@ -146,8 +146,12 @@ class Cinfdata(object):
                               'ORDER BY x'.format(setup_name)
         self.metadata_query = ('SELECT *, UNIX_TIMESTAMP(time) FROM measurements_{} '
                                'WHERE id=%s'.format(setup_name))
-        self.group_query = 'SELECT `id` FROM measurements_{} WHERE `{{}}` = %s order by '\
-                           'id'.format(setup_name)
+        if allow_wildcards:
+            self.group_query = 'SELECT `id` FROM measurements_{} WHERE `{{}}` LIKE %s order by '\
+                               'id'.format(setup_name)
+        else:
+            self.group_query = 'SELECT `id` FROM measurements_{} WHERE `{{}}` = %s order by '\
+                               'id'.format(setup_name)
 
         LOG.debug('Completed init in %s s', time() - start)
 
