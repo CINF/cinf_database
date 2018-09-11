@@ -3,8 +3,9 @@
 Introduction
 ============
 
-This pages provides an introduction to using the Cinfdate Database Client. Please read at
-least this sections and the :ref:`dangers-of-caching` section before jumping in with the
+This pages provides an introduction to using the Cinfdate Database
+Client. Please read the this section and the :ref:`dangers-of-caching`
+section before jumping in with the :ref:`getting_started` and the
 :ref:`examples`. The rest of the sections are optional background.
 
 The Cinfdata Database Client has three main goals:
@@ -16,6 +17,12 @@ The Cinfdata Database Client has three main goals:
 3. To **enable local caching** of the data returned by the Cinfdata database, in order to
    speed up fetching the data and make it possible to work offline or of poor internet
    connections
+
+If you just want to get started, go ahead and jump straight to the
+:ref:`getting_started`. Below is some more background.
+
+Behind the scenes
+-----------------
 
 Goals 1 and 2 are achieved mainly by making the maximum number of assumptions possible
 about:
