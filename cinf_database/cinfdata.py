@@ -55,7 +55,7 @@ class Cinfdata(object):
     """Class that provides easy access to the cinfdata database with optional local caching"""
 
     database_name = 'cinfdata'
-    main_host = 'servcinf-sql'
+    main_host = 'servcinf-sql.fysik.dtu.dk'
     main_port = '3306'
     secondary_host = '127.0.0.1'
     descriptions_table = 'dateplots_description'
