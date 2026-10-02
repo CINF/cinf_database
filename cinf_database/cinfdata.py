@@ -9,6 +9,7 @@ from os import path
 import os
 import sys
 from time import time
+import datetime
 from operator import itemgetter
 # Py 2/3 compatible import of pickle
 try:
@@ -45,6 +46,13 @@ except ImportError:
         # if that fails, just set it to None to indicate that we have no db module
         MySQLdb = None  # pylint: disable=invalid-name
         LOG.info('Using cinfdata without database')
+
+import MySQLdb.converters
+from MySQLdb.constants import FIELD_TYPE
+# If millisecond precision is added to a timestamp column, the data is returned
+# as decimal.Decimal type data. Return it as floats instead
+converter_index = MySQLdb.converters.conversions.copy()
+converter_index[FIELD_TYPE.NEWDECIMAL] = float
 
 
 class CinfdataError(Exception):
@@ -152,6 +160,8 @@ class Cinfdata(object):
         else:
             self.group_query = 'SELECT `id` FROM measurements_{} WHERE `{{}}` = %s order by '\
                                'id'.format(setup_name)
+        self.dateplot_query_id = 'SELECT {}, value FROM dateplots_{} WHERE type = %s and time between %s and %s order by time'.format("{}", setup_name)
+        self.dateplot_query_codename = 'SELECT {}, value FROM dateplots_{} WHERE type = (SELECT id FROM dateplots_descriptions WHERE codename = %s) and time between %s and %s order by time'.format("{}", setup_name)
 
         LOG.debug('Completed init in %s s', time() - start)
 
@@ -161,14 +171,15 @@ class Cinfdata(object):
         try:
             self.connection = MySQLdb.connect(
                 host=self.main_host, user=self.username, passwd=self.password,
-                db=self.database_name,
+                db=self.database_name, charset='utf8', conv=converter_index,
             )
             LOG.info('Using direct db connection: cinfdata:3306')
         except CONNECT_EXCEPTION:
             try:
                 self.connection = MySQLdb.connect(
                     host=self.secondary_host, port=local_forward_port,
-                    user=self.username, passwd=self.password, db=self.database_name
+                    user=self.username, passwd=self.password, db=self.database_name,
+                    charset='utf8', conv=converter_index,
                 )
                 LOG.info('Using port forward db connection: %s:%s', self.secondary_host,
                          local_forward_port)
@@ -178,6 +189,58 @@ class Cinfdata(object):
 
         if self.connection is not None:
             self.cursor = self.connection.cursor()
+
+    def get_datedata(self, codename, from_=None, to=None, unixtime=False):
+        """Get data from dateplots - non-caching
+
+        Args:
+            codename (int or str): The id (int) or codename (str) of the data entry in
+                dateplots_descriptions
+            from_ (str or datetime obj): The start of the data as datetime object or a
+                string in the form "YYYY-MM-DD HH:MM". Defaults to a day before `to` if
+                None
+            to (str or datetime obj): The end of the data as datetime object or a
+                string in the form "YYYY-MM-DD HH:MM". Defaults to now if None
+            unixtime (bool): If True, returns the time data as unixtime. Defaults to
+                returning time data as datetime objects.
+
+        Returns:
+            numpy.array: The measurement as a numpy array
+        """
+        if unixtime:
+            query_id = self.dateplot_query_id.format("UNIX_TIMESTAMP(time)")
+            query_codename = self.dateplot_query_codename.format("UNIX_TIMESTAMP(time)")
+        else:
+            query_id = self.dateplot_query_id.format("time")
+            query_codename = self.dateplot_query_codename.format("time")
+        if isinstance(codename, int):
+            query = query_id
+        elif isinstance(codename, str):
+            query = self.dateplot_query_codename
+        format_string = '%Y-%m-%d %H:%M'
+        if isinstance(to, str):
+            to = datetime.datetime.strptime(to, format_string)
+        elif to is None:
+            to = datetime.datetime.now()
+        if isinstance(from_, str):
+            from_ = datetime.datetime.strptime(from_, format_string)
+        elif from_ is None:
+            from_ = to - datetime.timedelta(days=1)
+
+        if self.cursor is not None:
+            start = time()
+            print(query)
+            print(codename, from_, to)
+            self.cursor.execute(query, (codename, from_, to))
+            data = np.array(self.cursor.fetchall())
+            LOG.debug('Fetched data for id %s from database in %0.4e s', codename,
+                      time() - start)
+
+            if data is None:
+                error = 'No data found for codename/id {}'.format(codename)
+                raise CinfdataError(error)
+
+        return data
 
     def get_data(self, measurement_id, scaling_factors=None):
         """Get data for measurement_id
